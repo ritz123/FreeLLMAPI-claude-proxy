@@ -5,6 +5,51 @@ gateway only ever advertises models that actually answer.
 
 Runs nightly via `claude-gateway-sync.timer`, plus on login if a run was missed.
 
+## Installation
+
+Fresh machine, reproducible from the repo:
+
+```bash
+git clone <repo> ~/work/claude-gateway-sync
+cd ~/work/claude-gateway-sync
+./install.sh
+```
+
+`install.sh` copies the tracked scripts into `~/.config/claude-gateway/`,
+installs the systemd user units into `~/.config/systemd/user/`,
+builds the Rust binary, and registers the daily timer.
+
+Secrets are *not* checked into the repo. On first run create
+`~/.config/claude-gateway/credentials.json`:
+
+```json
+{
+  "master_key": "sk-claude-gateway-local",
+  "above": { "type": "api", "key": "PASTE-KEY" },
+  "nvidia": { "type": "api", "key": "PASTE-KEY" }
+}
+```
+
+Mode 600. The repo is the source of truth for code; `credentials.json`,
+`litellm_config.yaml`, `probe-cache.json` and `catalog-cache.json` are
+local, generated, or ignored.
+
+The repo layout:
+
+```
+gateway/manage-providers.py    add/remove/list providers
+gateway/start-gateway.sh       injects credentials as env vars
+gateway/sync-models.py         Python fallback for the sync
+src/main.rs                    Rust sync implementation
+systemd/*.service/*.timer      user units for gateway + daily sync
+install.sh                     deploy repo -> ~/.config
+```
+
+All three gateway scripts are tracked. `install.sh` copies them to
+`~/.config/claude-gateway/` on install and after every `manage-providers.py`
+change. The code lives in the repo; the live copies are deployed
+artifacts. Re-run `./install.sh` after a `git pull` to refresh them.
+
 ---
 
 ## Why this exists
@@ -89,19 +134,21 @@ containing `claude` or `anthropic`. Unprefixed ids would be invisible in `/model
 
 ## Usage
 
+First, build (only needed after a `src/` change):
+
 ```bash
 cargo build --release
+```
 
+Run the sync:
+
+```bash
 ./target/release/claude-gateway-sync --dry-run     # print, change nothing
 ./target/release/claude-gateway-sync --refresh     # ignore cache, re-probe all
 ./target/release/claude-gateway-sync --no-restart  # write config, leave gateway up
 ```
 
-## Adding a provider
-
-Use `manage-providers.py`. Do **not** hand-edit the files — a provider spans
-four of them, and getting it half-right means the Rust and Python
-implementations drift apart.
+`manage-providers.py` is the preferred operator interface:
 
 ```bash
 MG=~/.config/claude-gateway/manage-providers.py
@@ -114,15 +161,39 @@ $MG add --dry-run newco https://… NEWCO_API_KEY
 $MG add --refresh newco https://… NEWCO_API_KEY   # add, then re-probe
 ```
 
-One command updates all four sites and rebuilds:
+The scripts live in the repo under `gateway/` and are deployed to
+`~/.config/claude-gateway/` by `install.sh`. `manage-providers.py` edits the
+repo copies and then redeploys them, so a `git pull` on another machine
+followed by `./install.sh` restores the exact same scripts.
+
+## Adding a provider
+
+Providers are defined in four places and must stay in sync:
 
 ```
 credentials.json    + the key (mode 600)
 start-gateway.sh    + export NEWCO_API_KEY="$(readkey newco)"
 src/main.rs         + Provider { prefix: "newco", ... }
-sync-models.py      + ("newco", "https://api.newco.com/v1", "NEWCO_API_KEY")
+gateway/sync-models.py      + ("newco", "https://api.newco.com/v1", "NEWCO_API_KEY")
                     → cargo build --release
 ```
+
+Use `manage-providers.py`. Do **not** hand-edit the files — it's easy to get half-right
+and leave Rust and Python emitting different configs. The script edits the repo copies
+under `gateway/` and then deploys them to `~/.config/claude-gateway/`. That keeps the
+repo authoritative and the live copies identical across machines.
+
+```bash
+MG=~/.config/claude-gateway/manage-providers.py
+
+$MG list                                    # audit what's wired in
+$MG add                                     # interactive, key typed blind
+$MG add newco https://api.newco.com NEWCO_API_KEY
+$MG remove newco                            # undo, everywhere
+$MG add --dry-run newco https://… NEWCO_API_KEY
+$MG add --refresh newco https://… NEWCO_API_KEY   # add, then re-probe
+```
+
 
 ### Validation happens before any edit
 
@@ -160,17 +231,19 @@ models are still reachable — they just never outrank a known-good model.
 
 | path | role |
 |---|---|
+| `gateway/manage-providers.py` | add/remove/list providers, deploys to `~/.config` |
+| `gateway/start-gateway.sh` | injects credentials as env vars (deployed copy) |
+| `gateway/sync-models.py` | Python fallback for the sync (deployed copy) |
 | `src/main.rs` | all logic |
 | `target/release/claude-gateway-sync` | binary the timer runs |
-| `~/.config/claude-gateway/sync-models.py` | Python original, kept as fallback |
-| `~/.config/claude-gateway/manage-providers.py` | add/remove/list providers |
-| `~/.config/claude-gateway/start-gateway.sh` | injects credentials as env vars |
-| `~/.config/claude-gateway/credentials.json` | gateway keys (`above`, `nvidia`) |
+| `install.sh` | deploy repo -> `~/.config/claude-gateway/` + systemd units |
+| `~/.config/claude-gateway/credentials.json` | gateway keys (`above`, `nvidia`, `master_key`) |
 | `~/.config/claude-gateway/litellm_config.yaml` | **generated** — do not hand-edit |
 | `~/.config/claude-gateway/probe-cache.json` | cached verdicts |
 
 `litellm_config.yaml` and both caches are overwritten on every run. Only
-`credentials.json` is stable.
+`credentials.json` is stable user data; everything else is tracked in this
+repo and deployed by `install.sh`.
 
 ## Credentials
 
@@ -179,6 +252,9 @@ OpenCode's `auth.json`. That separation is deliberate: while `above`/`nvidia`
 were in `auth.json`, OpenCode offered 112 unusable entries. A provider only
 becomes selectable when a credential for it exists, so moving the keys out
 removes the phantom entries while the gateway keeps working.
+
+`credentials.json` is **not tracked**. It is created by `install.sh` as a
+template on first install and never committed. Secrets stay local.
 
 Both `main.rs` and `start-gateway.sh` fall back to `auth.json` if the file goes
 missing, so a deletion degrades instead of breaking the gateway.
