@@ -1,0 +1,15 @@
+/target
+
+# Credentials and generated output must never be committed.
+/credentials.json
+*.bak-*
+*.env
+*.key
+litellm_config.yaml
+probe-cache.json
+catalog-cache.json
+
+# editor leftovers
+*.swp
+*.swo
+.*.sw?

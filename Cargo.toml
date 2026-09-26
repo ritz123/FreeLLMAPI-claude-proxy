@@ -1,0 +1,15 @@
+[package]
+name = "claude-gateway-sync"
+version = "2.0.0"
+edition = "2021"
+description = "Sync OpenCode cloud catalogs into the LiteLLM gateway config, with live probing"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "process", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+
+[profile.release]
+opt-level = 2
