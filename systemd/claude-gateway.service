@@ -1,0 +1,15 @@
+[Unit]
+Description=LiteLLM gateway: Claude Code -> OpenCode cloud (above, nvidia)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/biplab/.config/claude-gateway/start-gateway.sh
+Restart=on-failure
+RestartSec=5
+Environment=PATH=/home/biplab/.local/bin:/usr/bin:/bin
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

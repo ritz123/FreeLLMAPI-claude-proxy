@@ -13,3 +13,4 @@ catalog-cache.json
 *.swp
 *.swo
 .*.sw?
+gateway/__pycache__
