@@ -1,6 +1,0 @@
-[Unit]
-Description=Daily sync of OpenCode cloud catalogs into Claude gateway
-
-[Service]
-Type=oneshot
-ExecStart=/home/biplab/work/claude-gateway-sync/target/release/claude-gateway-sync

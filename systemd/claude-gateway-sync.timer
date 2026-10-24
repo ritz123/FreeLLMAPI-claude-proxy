@@ -1,9 +1,0 @@
-[Unit]
-Description=Daily sync of OpenCode cloud catalogs into Claude gateway
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
