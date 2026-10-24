@@ -1,19 +1,8 @@
 # claude-gateway
 
-Minimal LiteLLM gateway that presents FreeLLMAPI's `auto` router as a catalog-valid Anthropic model (`claude-3-5-sonnet-20241022`) to Claude Code.
+Minimal LiteLLM gateway presenting FreeLLMAPI's `auto` router as a catalog-valid Anthropic model to Claude Code.
 
-## Architecture
-
-```
-Claude Code (port 4000) → LiteLLM Gateway → FreeLLMAPI (port 3002)
-                              │
-                              └──► model: hosted_vllm/auto
-                                   api_base: http://localhost:3002/v1
-```
-
-No model probing, no nightly sync, no catalog caching. FreeLLMAPI's `auto` endpoint does its own smart routing (picks best available model per request). The gateway just forwards with a name the static picker recognizes.
-
-## Installation
+## Install
 
 ```bash
 git clone <repo> ~/work/claude-gateway-sync
@@ -21,81 +10,45 @@ cd ~/work/claude-gateway-sync
 ./install.sh
 ```
 
-`install.sh`:
-- Deploys scripts to `~/.config/claude-gateway/`
-- Installs systemd user unit `claude-gateway.service`
-- Creates `credentials.json` template (edit with real keys)
+**Prerequisites:** FreeLLMAPI running on `localhost:3002`, Python 3, LiteLLM (`pipx install litellm`), systemd user units.
 
-## Configuration
+## What install.sh does
 
-### Required: `~/.config/claude-gateway/credentials.json` (mode 600)
+1. Checks FreeLLMAPI is reachable
+2. Prompts for your FreeLLMAPI key (hidden input)
+3. Validates the key works (catalog + completion test)
+4. Deploys gateway scripts to `~/.config/claude-gateway/`
+5. Configures `~/.claude/settings.json` automatically
+6. Installs & starts `claude-gateway.service` on port 4000
 
-```json
-{
-  "master_key": "sk-claude-gateway-local",
-  "freellmapi": { "type": "api", "key": "freellmapi-...your-key..." }
-}
-```
+## After install
 
-### Optional: add more providers
+Just run `claude`. The model `claude-3-5-sonnet-20241022` is pre-selected and routes through FreeLLMAPI's smart `auto` endpoint.
+
+## Files
+
+| location | purpose |
+|---|---|
+| `~/.config/claude-gateway/credentials.json` | your keys (mode 600) |
+| `~/.config/claude-gateway/litellm_config.yaml` | static gateway config |
+| `~/.config/claude-gateway/start-gateway.sh` | starts LiteLLM with env vars |
+| `~/.config/claude-gateway/manage-providers.py` | add more providers later |
+
+## Add another provider
 
 ```bash
-MG=~/.config/claude-gateway/manage-providers.py
-$MG add newco https://api.newco.com NEWCO_API_KEY
+~/work/claude-gateway-sync/gateway/manage-providers.py add <prefix> <base-url> <ENV_VAR>
 ```
 
-This updates three config sites atomically:
-1. `credentials.json` — the key
-2. `start-gateway.sh` — exports `NEWCO_API_KEY` env var
-3. `gateway/sync-models.py` — `PROVIDERS` list (Python fallback)
+## Logs
 
-## Files in this repo
-
-| path | role |
-|---|---|
-| `gateway/manage-providers.py` | add/remove/list providers, deploys to `~/.config` |
-| `gateway/start-gateway.sh` | injects credentials as env vars, starts LiteLLM |
-| `gateway/sync-models.py` | Python fallback (not used at runtime) |
-| `systemd/claude-gateway.service` | systemd user unit for the gateway |
-| `install.sh` | deploy repo → `~/.config/claude-gateway/` + systemd unit |
-
-## Files at runtime (`~/.config/claude-gateway/`)
-
-| file | description |
-|---|---|
-| `credentials.json` | **your keys** (mode 600, not tracked) |
-| `litellm_config.yaml` | **static** — hand-edited, not generated |
-| `start-gateway.sh` | deployed copy, reads keys from credentials.json |
-| `manage-providers.py` | deployed copy for adding providers later |
-
-## Dependencies
-
-- **Python 3** — for `manage-providers.py` and `start-gateway.sh`'s `readkey` helper
-- **LiteLLM** — installed via `uv`/`pipx` (`~/.local/bin/litellm`)
-- **FreeLLMAPI** — running on `localhost:3002` (external to this project)
-- **systemd user units** — for auto-start on login
-
-## Claude Code setup
-
-In `~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
-    "ANTHROPIC_AUTH_TOKEN": "sk-claude-gateway-local",
-    "ANTHROPIC_MODEL": "claude-3-5-sonnet-20241022",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-3-5-sonnet-20241022",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-3-5-sonnet-20241022",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-3-5-sonnet-20241022",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576"
-  }
-}
+```bash
+journalctl --user -u claude-gateway.service -f
 ```
 
-The model name `claude-3-5-sonnet-20241022` exists in models.dev's catalog, so the static picker shows no warning. At runtime it hits FreeLLMAPI's `auto` router.
+## Uninstall
 
-## Why not the old sync?
-
-The original `claude-gateway-sync` probed every model in every provider's catalog (63+ models, 10–25 min cold). FreeLLMAPI's `auto` makes that obsolete — it's one endpoint that routes intelligently. One static config, zero maintenance.
+```bash
+systemctl --user disable --now claude-gateway.service
+rm -f ~/.config/systemd/user/claude-gateway.service ~/.config/claude-gateway/{sync-models.py,manage-providers.py,start-gateway.sh}
+```
