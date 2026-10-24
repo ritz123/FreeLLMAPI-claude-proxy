@@ -1,6 +1,6 @@
-# claude-gateway
+# FreeLLMAPI-Claude-Proxy
 
-Minimal LiteLLM gateway presenting FreeLLMAPI's `auto` router as a catalog-valid Anthropic model to Claude Code.
+Minimal LiteLLM proxy presenting FreeLLMAPI's `auto` router as a catalog-valid Anthropic model to Claude Code.
 
 ## Install
 
@@ -18,7 +18,7 @@ The installer will prompt for your FreeLLMAPI base URL (default `http://localhos
 
 1. Prompts for FreeLLMAPI base URL and API key
 2. Validates the key works (catalog + completion test)
-3. Deploys gateway scripts to config directory
+3. Deploys proxy scripts to config directory
 4. Configures `~/.claude/settings.json` automatically
 5. Installs & starts `claude-gateway.service` on port 4000
 
@@ -31,7 +31,7 @@ Just run `claude`. The model `claude-3-5-sonnet-20241022` is pre-selected and ro
 | location | purpose |
 |---|---|
 | `~/.config/claude-gateway/credentials.json` | your keys (mode 600) |
-| `~/.config/claude-gateway/litellm_config.yaml` | static gateway config |
+| `~/.config/claude-gateway/litellm_config.yaml` | static proxy config |
 | `~/.config/claude-gateway/start-gateway.sh` | starts LiteLLM with env vars |
 | `~/.config/claude-gateway/manage-providers.py` | add more providers later |
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Claude gateway from a fresh clone of this repo.
+# Install FreeLLMAPI-Claude-Proxy from a fresh clone of this repo.
 #
 #   git clone <repo> <your-folder>
 #   cd <your-folder>
