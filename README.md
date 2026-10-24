@@ -5,8 +5,8 @@ Minimal LiteLLM gateway presenting FreeLLMAPI's `auto` router as a catalog-valid
 ## Install
 
 ```bash
-git clone <repo> ~/work/claude-gateway-sync
-cd ~/work/claude-gateway-sync
+git clone <repo> <your-folder>
+cd <your-folder>
 ./install.sh
 ```
 
@@ -17,7 +17,7 @@ cd ~/work/claude-gateway-sync
 1. Checks FreeLLMAPI is reachable
 2. Prompts for your FreeLLMAPI key (hidden input)
 3. Validates the key works (catalog + completion test)
-4. Deploys gateway scripts to `~/.config/claude-gateway/`
+4. Deploys gateway scripts to config directory
 5. Configures `~/.claude/settings.json` automatically
 6. Installs & starts `claude-gateway.service` on port 4000
 
@@ -37,7 +37,7 @@ Just run `claude`. The model `claude-3-5-sonnet-20241022` is pre-selected and ro
 ## Add another provider
 
 ```bash
-~/work/claude-gateway-sync/gateway/manage-providers.py add <prefix> <base-url> <ENV_VAR>
+<your-folder>/gateway/manage-providers.py add <prefix> <base-url> <ENV_VAR>
 ```
 
 ## Logs
