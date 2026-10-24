@@ -24,7 +24,6 @@ cd ~/work/claude-gateway-sync
 `install.sh`:
 - Deploys scripts to `~/.config/claude-gateway/`
 - Installs systemd user unit `claude-gateway.service`
-- Builds the Rust binary (unused at runtime, kept for `manage-providers.py` validation)
 - Creates `credentials.json` template (edit with real keys)
 
 ## Configuration
@@ -45,22 +44,18 @@ MG=~/.config/claude-gateway/manage-providers.py
 $MG add newco https://api.newco.com NEWCO_API_KEY
 ```
 
-This updates all four config sites atomically:
+This updates three config sites atomically:
 1. `credentials.json` — the key
 2. `start-gateway.sh` — exports `NEWCO_API_KEY` env var
-3. `src/main.rs` — `PROVIDERS` table (for validation)
-4. `gateway/sync-models.py` — `PROVIDERS` list (Python fallback)
-
-Then rebuild: `cargo build --release` (only needed after provider changes).
+3. `gateway/sync-models.py` — `PROVIDERS` list (Python fallback)
 
 ## Files in this repo
 
 | path | role |
 |---|---|
-| `src/main.rs` | provider definitions + validation logic for `manage-providers.py` |
 | `gateway/manage-providers.py` | add/remove/list providers, deploys to `~/.config` |
 | `gateway/start-gateway.sh` | injects credentials as env vars, starts LiteLLM |
-| `gateway/sync-models.py` | Python fallback (not used) |
+| `gateway/sync-models.py` | Python fallback (not used at runtime) |
 | `systemd/claude-gateway.service` | systemd user unit for the gateway |
 | `install.sh` | deploy repo → `~/.config/claude-gateway/` + systemd unit |
 
@@ -75,7 +70,6 @@ Then rebuild: `cargo build --release` (only needed after provider changes).
 
 ## Dependencies
 
-- **Rust** (`cargo`) — only for building the validation binary used by `manage-providers.py`
 - **Python 3** — for `manage-providers.py` and `start-gateway.sh`'s `readkey` helper
 - **LiteLLM** — installed via `uv`/`pipx` (`~/.local/bin/litellm`)
 - **FreeLLMAPI** — running on `localhost:3002` (external to this project)

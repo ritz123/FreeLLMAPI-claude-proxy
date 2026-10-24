@@ -7,8 +7,7 @@
 #
 # The repo is the single source of truth. This script COPIES the tracked
 # scripts into ~/.config/claude-gateway/ and the gateway systemd unit into
-# ~/.config/systemd/user/, builds the Rust binary (for manage-providers.py
-# validation), and enables the gateway service.
+# ~/.config/systemd/user/, and enables the gateway service.
 #
 # Copies, not symlinks: a real file at the destination behaves predictably for
 # editors, backup tools and anything that stats the path. The cost is that they
@@ -25,7 +24,6 @@ UNITS="$HOME_/.config/systemd/user"
 say() { printf '  %s\n' "$*"; }
 die() { printf '  error: %s\n' "$*" >&2; exit 1; }
 
-command -v cargo >/dev/null || die "cargo not found -- install Rust first: https://rustup.rs"
 command -v python3 >/dev/null || die "python3 not found"
 
 say "repo: $REPO"
@@ -64,12 +62,7 @@ for u in "$REPO"/systemd/claude-gateway.service; do
   say "installed $UNITS/$name"
 done
 
-# ---- 4. build (for manage-providers.py validation) -------------------------
-say "building validation binary (this takes a minute on first run)"
-( cd "$REPO" && cargo build --release ) >/dev/null
-say "built $REPO/target/release/claude-gateway-sync"
-
-# ---- 5. enable gateway service ---------------------------------------------
+# ---- 4. enable gateway service ---------------------------------------------
 systemctl --user daemon-reload
 systemctl --user enable --now claude-gateway.service
 say "gateway service enabled and started"

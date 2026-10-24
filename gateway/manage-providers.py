@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
-"""Add, list, or remove a LiteLLM gateway provider across all four config sites.
+"""Add, list, or remove a LiteLLM gateway provider across three config sites.
 
 WHY A SCRIPT
-    Adding a provider means touching four files that must stay in sync, plus a
-    Rust rebuild. Doing it by hand is easy to get half-right, and a provider
-    that looks fine can still be dead (every provider added so far shipped
-    dozens of models that 403/404 on contact). This script validates the
+    Adding a provider means touching three files that must stay in sync.
+    Doing it by hand is easy to get half-right. This script validates the
     credential and catalog BEFORE editing anything, so a bad provider never
     reaches the config.
 
 WHAT IT TOUCHES
     ~/.config/claude-gateway/credentials.json          the key
     ~/.config/claude-gateway/start-gateway.sh          env var for litellm
-    ~/work/claude-gateway-sync/src/main.rs             PROVIDERS table
-    ~/.config/claude-gateway/sync-models.py            PROVIDERS list
-    ...then rebuilds the Rust binary and re-probes.
+    ~/work/claude-gateway-sync/gateway/sync-models.py  PROVIDERS list (fallback)
 
-    All four are edited together or not at all, so the Rust and Python
-    implementations cannot drift apart.
+    All three are edited together or not at all.
 
 USAGE
     manage-providers.py list
@@ -48,8 +43,6 @@ import urllib.request
 from pathlib import Path
 
 HOME = os.path.expanduser("~")
-# credentials.json holds secrets, so it lives only in the destination -- never
-# in the repo.
 CRED = f"{HOME}/.config/claude-gateway/credentials.json"
 
 
@@ -62,15 +55,14 @@ def find_repo() -> str:
     $CLAUDE_GATEWAY_REPO or the conventional path.
     """
     env = os.environ.get("CLAUDE_GATEWAY_REPO")
-    if env and os.path.exists(f"{env}/src/main.rs"):
+    if env and os.path.exists(f"{env}/gateway/manage-providers.py"):
         return env
     for parent in Path(__file__).resolve().parents:
-        if (parent / "src" / "main.rs").exists() and (parent / "gateway").is_dir():
+        if (parent / "gateway").is_dir():
             return str(parent)
     default = f"{HOME}/work/claude-gateway-sync"
-    if os.path.exists(f"{default}/src/main.rs"):
+    if os.path.exists(f"{default}/gateway/manage-providers.py"):
         return default
-    # Runs at import time, before die() is defined, so exit directly.
     print(
         "  error: cannot locate the claude-gateway-sync repo. Set CLAUDE_GATEWAY_REPO "
         f"to its path (looked in {default}).",
@@ -79,18 +71,11 @@ def find_repo() -> str:
     sys.exit(1)
 
 
-# The repo copy is canonical for everything version-controlled. Files in
-# ~/.config/claude-gateway/ are deployed copies; deploy() pushes repo ->
-# destination after every edit so the two cannot drift.
 REPO = find_repo()
 DEST = f"{HOME}/.config/claude-gateway"
-RUST = f"{REPO}/src/main.rs"
 START = f"{REPO}/gateway/start-gateway.sh"
 PY = f"{REPO}/gateway/sync-models.py"
-CARGO = REPO
-BIN = f"{REPO}/target/release/claude-gateway-sync"
 
-# repo path -> installed path, for deploy()
 DEPLOYED = {
     f"{REPO}/gateway/sync-models.py": f"{DEST}/sync-models.py",
     f"{REPO}/gateway/manage-providers.py": f"{DEST}/manage-providers.py",
@@ -110,7 +95,7 @@ def ok(msg: str):
 
 
 def norm_base(base: str) -> str:
-    """Provider base must end in exactly one /v1 -- mirrors norm_base() in main.rs."""
+    """Provider base must end in exactly one /v1."""
     b = base.strip().rstrip("/")
     return b if b.endswith("/v1") else f"{b}/v1"
 
@@ -139,12 +124,7 @@ def backup(paths: list[str], stamp: str) -> list[str]:
 
 
 def deploy() -> list[str]:
-    """Copy repo -> ~/.config/claude-gateway/ so the installed copies match.
-
-    Called after every mutating command. Without this the repo would be
-    authoritative for `add`/`remove` but the live files would silently keep the
-    old provider list, and the next install.sh run would revert the change.
-    """
+    """Copy repo -> ~/.config/claude-gateway/ so the installed copies match."""
     pushed = []
     for src, dst in DEPLOYED.items():
         if os.path.exists(src) and os.path.abspath(src) != os.path.abspath(dst):
@@ -244,22 +224,6 @@ def valid_env(e: str) -> str:
 
 # ------------------------------------------------------------------ mutators
 
-def add_to_rust(prefix: str, base: str, env: str) -> str:
-    src = read(RUST)
-    if re.search(rf'prefix:\s*"{re.escape(prefix)}"', src):
-        die(f"provider '{prefix}' is already in {RUST}")
-    line = (
-        f'    Provider {{ prefix: "{prefix}", base: "{base}", env: "{env}" }},\n'
-    )
-    # insert immediately before the '];' that closes the PROVIDERS const
-    m = re.search(r"const PROVIDERS: &\[Provider\] = &\[.*?\n\];", src, re.S)
-    if not m:
-        die(f"could not locate the PROVIDERS table in {RUST}")
-    block = m.group(0)
-    write(RUST, src.replace(block, block[: -len("\n];")] + "\n" + line + "];"))
-    return line
-
-
 def add_to_python(prefix: str, base: str, env: str) -> str:
     src = read(PY)
     if re.search(rf'\(\s*"{re.escape(prefix)}"\s*,', src):
@@ -298,10 +262,9 @@ def add_to_start(prefix: str, env: str) -> str:
 
 
 def remove_everywhere(prefix: str) -> list[str]:
-    """Strip a provider from all four sites. Returns human-readable notes."""
+    """Strip a provider from all three sites. Returns human-readable notes."""
     notes = []
     for path, pat in (
-        (RUST, rf'^\s*Provider \{{ prefix: "{re.escape(prefix)}".*\n'),
         (PY, rf'^\s*\(\s*"{re.escape(prefix)}"\s*,.*\n'),
         (START, rf'^export [A-Z0-9_]+="\$\(readkey {re.escape(prefix)}\)"\n'),
     ):
@@ -314,8 +277,6 @@ def remove_everywhere(prefix: str) -> list[str]:
         cred = json.load(open(CRED))
     except (OSError, ValueError):
         cred = {}
-    # Test membership against the filtered view, but pop from the real dict --
-    # provider_entries() returns a copy, so popping its result is a no-op.
     if prefix in provider_entries(cred):
         cred.pop(prefix)
         with open(CRED, "w") as f:
@@ -351,12 +312,10 @@ def cmd_list(args) -> int:
     except (OSError, ValueError):
         cred = {}
     for p in cred:
-        in_rust = f'prefix: "{p}"' in read(RUST)
         in_py = f'("{p}",' in read(PY)
         in_start = f"readkey {p}" in read(START)
         mark = lambda b: "ok" if b else "MISSING"  # noqa: E731
-        print(f"    {p:10} key:set  rust:{mark(in_rust):7} "
-              f"python:{mark(in_py):7} start:{mark(in_start)}")
+        print(f"    {p:10} key:set  python:{mark(in_py):7} start:{mark(in_start)}")
     stale = [p for p in current_providers() if p not in cred]
     print(f"\n  total: {len(cred)}\n")
     if stale:
@@ -368,7 +327,7 @@ def cmd_list(args) -> int:
                         headers={"Authorization": "Bearer sk-claude-gateway-local"})
         with u.urlopen(req, timeout=6) as r:
             n = len(json.loads(r.read())["data"])
-        print(f"    {n} advertised (run the sync to refresh)\n")
+        print(f"    {n} advertised\n")
     except Exception:
         print("    gateway not responding -- is claude-gateway.service running?\n")
     return 0
@@ -379,7 +338,6 @@ def cmd_add(args) -> int:
     base_in = args.base or input(f"  base URL (e.g. https://api.newco.com or http://host:11434 for Ollama): ").strip()
     env = valid_env(args.env or input("  env var name (e.g. NEWCO_API_KEY): ").strip())
 
-    # Check if base_in looks like an Ollama instance (any host on port 11434)
     is_ollama = ":11434" in base_in
     key = args.key
     if not key:
@@ -412,8 +370,6 @@ def cmd_add(args) -> int:
     shown = ", ".join(ids[:4]) + (" ..." if len(ids) > 4 else "")
     ok(f"  e.g. {shown}")
 
-    # A catalog is not proof of a working key -- several providers serve
-    # /v1/models without auth. Confirm with a real completion.
     print("  confirming the key works (real completion, not just catalog access) ...")
     live, err = first_live_model(base, key, ids)
     if not live:
@@ -421,17 +377,15 @@ def cmd_add(args) -> int:
         print("  nothing was changed. the catalog listed models, but none completed.\n")
         return 2
     ok(f"key works - {live} returned a completion")
-    print("\n  note: only models that pass an active probe reach the config.")
-    print("        catalog entries that 403/404 are dropped automatically.\n")
+    print("\n  note: the gateway uses a static litellm_config.yaml.")
+    print("        add your model entry there manually after adding the provider.\n")
 
-    targets = [CRED, START, RUST, PY]
+    targets = [CRED, START, PY]
     if args.dry_run:
         print("  --dry-run: would do the following, changing nothing\n")
         print(f"    credentials.json   + {prefix!r} key (mode 600)")
         print(f"    start-gateway.sh   + export {env}=\"$(readkey {prefix})\"")
-        print(f"    main.rs            + Provider {{ prefix: {prefix!r}, ... }}")
         print(f"    sync-models.py     + ({prefix!r}, {base!r}, {env!r})")
-        print("    then: cargo build --release && claude-gateway-sync --refresh\n")
         return 0
 
     if not args.yes and sys.stdin.isatty():
@@ -446,36 +400,16 @@ def cmd_add(args) -> int:
     try:
         add_to_cred(prefix, key)
         add_to_start(prefix, env)
-        add_to_rust(prefix, base, env)
         add_to_python(prefix, base, env)
     except SystemExit:
         for b in made:
             shutil.copy2(b, b[: -len(f".bak-{stamp}")])
             os.remove(b)
         die("rolled back -- provider not added")
-    ok(f"added {prefix} to credentials.json, start-gateway.sh, main.rs, sync-models.py")
-
-    print("\n  building rust binary ...")
-    r = subprocess.run(["cargo", "build", "--release"], cwd=CARGO,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        print(r.stderr[-1500:], file=sys.stderr)
-        for b in made:
-            shutil.copy2(b, b[: -len(f".bak-{stamp}")])
-            os.remove(b)
-        die("build failed -- sources rolled back")
-    ok("build ok")
+    ok(f"added {prefix} to credentials.json, start-gateway.sh, sync-models.py")
 
     for p in deploy():
         ok(f"deployed {p.replace(HOME, '~')}")
-
-    if args.refresh:
-        print("\n  probing (this can take 10-25 min on a cold sweep) ...")
-        r = subprocess.run([BIN, "--refresh"], capture_output=True, text=True)
-        print("\n".join(f"    {l}" for l in r.stdout.strip().splitlines()[-12:]))
-    else:
-        print(f"\n  next step:  {BIN} --refresh")
-        print("               (--refresh re-probes everything, not just new models)")
 
     print(f"\n  to undo:     {sys.argv[0]} remove {prefix}")
     print(f"               (or restore the .bak-{stamp} files)\n")
@@ -489,11 +423,11 @@ def cmd_remove(args) -> int:
         cred = provider_entries(json.load(open(CRED)))
     except (OSError, ValueError):
         cred = {}
-    if prefix not in cred and f'prefix: "{prefix}"' not in read(RUST):
+    if prefix not in cred and f'("{prefix}",' not in read(PY):
         die(f"'{prefix}' is not a configured provider")
 
     if args.dry_run:
-        print(f"\n  --dry-run: would remove {prefix} from all four config sites\n")
+        print(f"\n  --dry-run: would remove {prefix} from all three config sites\n")
         return 0
     if not args.yes and sys.stdin.isatty():
         if input(f"  remove {prefix}? [y/N] ").strip().lower() not in ("y", "yes"):
@@ -501,22 +435,14 @@ def cmd_remove(args) -> int:
             return 1
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    targets = [CRED, START, RUST, PY]
+    targets = [CRED, START, PY]
     backup(targets, stamp)
     notes = remove_everywhere(prefix)
     ok(f"removed {prefix} from: {', '.join(n.replace(HOME, '~') for n in notes) or 'nothing found'}")
 
-    r = subprocess.run(["cargo", "build", "--release"], cwd=CARGO,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        die("build failed after removal -- restore from .bak-" + stamp)
-    ok("rebuilt")
-
     for p in deploy():
         ok(f"deployed {p.replace(HOME, '~')}")
 
-    if args.refresh:
-        subprocess.run([BIN, "--refresh"], capture_output=True, text=True)
     print(f"\n  re-ran sync: {len(notes)} site(s) updated, gateway will advertise fewer models\n")
     return 0
 
@@ -527,15 +453,13 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("USAGE")[-1],
     )
-    # Shared flags are attached to the top-level parser AND to every
-    # subcommand, so `add x --dry-run` and `--dry-run add x` both work.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--dry-run", action="store_true",
                         help="show what would change, touch nothing")
     common.add_argument("--yes", "-y", action="store_true",
                         help="skip the confirmation prompt")
     common.add_argument("--refresh", action="store_true",
-                        help="run the sync with --refresh afterwards")
+                        help="reserved for compatibility")
     for f in ("--dry-run", "--yes", "-y", "--refresh"):
         ap.add_argument(f, action="store_true" if f != "-y" else "store_true",
                         dest={"-y": "yes"}.get(f, f.lstrip("-")),
@@ -558,14 +482,13 @@ def main() -> int:
     p.set_defaults(fn=cmd_remove)
 
     args = ap.parse_args()
-    # A flag set on the subparser wins; otherwise fall back to the global one.
     for f in ("dry_run", "yes", "refresh"):
         if not getattr(args, f, False):
             setattr(args, f, getattr(args, f, False))
     if not getattr(args, "fn", None):
         ap.print_help()
         return 0
-    for p in (CRED, START, RUST, PY):
+    for p in (CRED, START, PY):
         if not os.path.exists(p):
             die(f"expected file missing: {p}")
     return args.fn(args)
