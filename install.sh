@@ -7,7 +7,8 @@
 #
 # The repo is the single source of truth. This script COPIES the tracked
 # scripts into ~/.config/claude-gateway/ and the gateway systemd unit into
-# ~/.config/systemd/user/, configures Claude Code settings, and enables the gateway service.
+# ~/.config/systemd/user/, configures Claude Code settings, prompts for
+# FreeLLMAPI key, validates it, and enables the gateway service.
 #
 # Copies, not symlinks: a real file at the destination behaves predictably for
 # editors, backup tools and anything that stats the path. The cost is that they
@@ -26,8 +27,16 @@ say() { printf '  %s\n' "$*"; }
 die() { printf '  error: %s\n' "$*" >&2; exit 1; }
 
 command -v python3 >/dev/null || die "python3 not found"
+command -v curl >/dev/null || die "curl not found"
 
 say "repo: $REPO"
+
+# ---- 0. check FreeLLMAPI is running ----------------------------------------
+say "checking FreeLLMAPI on localhost:3002..."
+if ! curl -s -o /dev/null -w "%{http_code}" http://localhost:3002/health --max-time 5 | grep -q 200; then
+  die "FreeLLMAPI not responding on http://localhost:3002/health. Start it first."
+fi
+say "FreeLLMAPI is reachable"
 
 # ---- 1. config dir + deploy tracked scripts --------------------------------
 mkdir -p "$CFG"
@@ -37,20 +46,53 @@ for f in sync-models.py manage-providers.py start-gateway.sh; do
   say "deployed $CFG/$f"
 done
 
-# ---- 2. credentials -------------------------------------------------------
+# ---- 2. credentials: prompt for FreeLLMAPI key -----------------------------
 if [ ! -f "$CFG/credentials.json" ]; then
-  say "creating $CFG/credentials.json -- ADD YOUR REAL KEYS, it is untracked by design"
-  cat > "$CFG/credentials.json" <<'JSON'
+  say "FreeLLMAPI key not found in credentials.json"
+  # Read key hidden from stdin (works both TTY and piped)
+  if [ -t 0 ]; then
+    printf "  Enter your FreeLLMAPI key (input hidden): "
+    IFS= read -rs FREELLAPI_KEY
+    echo
+  else
+    IFS= read -r FREELLAPI_KEY
+  fi
+  if [ -z "$FREELLAPI_KEY" ]; then
+    die "no FreeLLMAPI key supplied"
+  fi
+
+  say "validating key against FreeLLMAPI..."
+  # Quick validation: catalog + one completion
+  CATALOG_RESP=$(curl -s -w "\n%{http_code}" http://localhost:3002/v1/models \
+    -H "Authorization: Bearer $FREELLAPI_KEY" --max-time 10)
+  HTTP_CODE=$(echo "$CATALOG_RESP" | tail -1)
+  if [ "$HTTP_CODE" != "200" ]; then
+    die "FreeLLMAPI catalog fetch failed (HTTP $HTTP_CODE). Check your key."
+  fi
+  MODEL_COUNT=$(echo "$CATALOG_RESP" | head -1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data', d)))")
+  say "catalog OK, $MODEL_COUNT models advertised"
+
+  # Test completion with 'auto'
+  COMP_RESP=$(curl -s -w "\n%{http_code}" http://localhost:3002/v1/chat/completions \
+    -H "Authorization: Bearer $FREELLAPI_KEY" -H "Content-Type: application/json" \
+    -d '{"model":"auto","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' --max-time 15)
+  HTTP_CODE=$(echo "$COMP_RESP" | tail -1)
+  if [ "$HTTP_CODE" != "200" ]; then
+    die "FreeLLMAPI completion test failed (HTTP $HTTP_CODE). Key may be invalid or no providers configured."
+  fi
+  say "key validated - FreeLLMAPI auto router works"
+
+  cat > "$CFG/credentials.json" <<JSON
 {
   "master_key": "sk-claude-gateway-local",
   "freellmapi": {
     "type": "api",
-    "key": "PASTE-YOUR-FREELLAPI-KEY-HERE"
+    "key": "$FREELLAPI_KEY"
   }
 }
 JSON
   chmod 600 "$CFG/credentials.json"
-  say "  ^ edit this before starting the gateway"
+  say "credentials.json written (mode 600)"
 else
   say "credentials.json exists, leaving it alone"
 fi
@@ -72,7 +114,6 @@ from pathlib import Path
 settings_path = Path("$CLAUDE_SETTINGS")
 settings_path.parent.mkdir(parents=True, exist_ok=True)
 
-# Load existing or create new
 if settings_path.exists():
     try:
         with open(settings_path) as f:
@@ -84,13 +125,10 @@ if settings_path.exists():
 else:
     settings = {}
 
-# Ensure env dict exists
 if "env" not in settings:
     settings["env"] = {}
 
 env = settings["env"]
-
-# Gateway configuration
 env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:4000"
 env["ANTHROPIC_AUTH_TOKEN"] = "sk-claude-gateway-local"
 env["ANTHROPIC_API_KEY"] = ""
@@ -101,12 +139,10 @@ env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "claude-3-5-sonnet-20241022"
 env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
 env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = "1048576"
 
-# Preserve existing modelSettings if present, update the key
 if "modelSettings" not in settings:
     settings["modelSettings"] = {}
 settings["modelSettings"]["claude-3-5-sonnet-20241022"] = {"effortLevel": "high"}
 
-# Write atomically
 tmp = settings_path.with_suffix(".json.tmp")
 with open(tmp, "w") as f:
     json.dump(settings, f, indent=2)
@@ -121,18 +157,35 @@ systemctl --user daemon-reload
 systemctl --user enable --now claude-gateway.service
 say "gateway service enabled and started"
 
+# ---- 6. wait for gateway and verify ----------------------------------------
+say "waiting for gateway to be ready..."
+for i in {1..10}; do
+  if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/v1/models \
+     -H "Authorization: Bearer sk-claude-gateway-local" --max-time 3 | grep -q 200; then
+    say "gateway is up"
+    break
+  fi
+  sleep 1
+done
+
+MODELS=$(curl -s http://127.0.0.1:4000/v1/models \
+  -H "Authorization: Bearer sk-claude-gateway-local" --max-time 5 \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print([m['id'] for m in d['data']])")
+say "gateway advertising: $MODELS"
+
 cat <<EOF
 
-  next:
-    1. edit $CFG/credentials.json   -- real freellmapi key + master_key
-    2. systemctl --user restart claude-gateway.service
-    3. curl -H 'Authorization: Bearer <master_key>' http://127.0.0.1:4000/v1/models
-    4. run 'claude' -- model is pre-configured
-
-  to add another provider:
+  ✓ Installation complete!
+  
+  Next: run 'claude' — it will use the gateway automatically.
+  
+  Your FreeLLMAPI key is stored in: $CFG/credentials.json
+  Gateway logs: journalctl --user -u claude-gateway.service -f
+  
+  To add another provider later:
     $REPO/gateway/manage-providers.py add <prefix> <base-url> <ENV_VAR>
-
-  to uninstall:
+  
+  To uninstall:
     systemctl --user disable --now claude-gateway.service
     rm -f $UNITS/claude-gateway.service $CFG/{sync-models.py,manage-providers.py,start-gateway.sh}
     (leave credentials.json and the repo alone)
