@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Install the Claude gateway from a fresh clone of this repo.
 #
-#   git clone <repo> ~/work/claude-gateway-sync
-#   cd ~/work/claude-gateway-sync
+#   git clone <repo> <your-folder>
+#   cd <your-folder>
 #   ./install.sh
 #
 # The repo is the single source of truth. This script COPIES the tracked
 # scripts into ~/.config/claude-gateway/ and the gateway systemd unit into
-# ~/.config/systemd/user/, configures Claude Code settings, prompts for
-# FreeLLMAPI key, validates it, and enables the gateway service.
+# ~/.config/systemd/user/, prompts for FreeLLMAPI URL + key, validates them,
+# configures Claude Code settings, and enables the gateway service.
 #
 # Copies, not symlinks: a real file at the destination behaves predictably for
 # editors, backup tools and anything that stats the path. The cost is that they
@@ -31,14 +31,61 @@ command -v curl >/dev/null || die "curl not found"
 
 say "repo: $REPO"
 
-# ---- 0. check FreeLLMAPI is running ----------------------------------------
-say "checking FreeLLMAPI on localhost:3002..."
-if ! curl -s -o /dev/null -w "%{http_code}" http://localhost:3002/health --max-time 5 | grep -q 200; then
-  die "FreeLLMAPI not responding on http://localhost:3002/health. Start it first."
+# ---- 0. prompt for FreeLLMAPI base URL + key (read FIRST, before any heredoc) --
+DEFAULT_FREELLAPI_URL="http://localhost:3002"
+if [ -t 0 ]; then
+  printf "  FreeLLMAPI base URL [%s]: " "$DEFAULT_FREELLAPI_URL"
+  IFS= read -r FREELLAPI_URL
+  FREELLAPI_URL="${FREELLAPI_URL:-$DEFAULT_FREELLAPI_URL}"
+  printf "  Enter your FreeLLMAPI key (input hidden): "
+  IFS= read -rs FREELLAPI_KEY
+  echo
+else
+  IFS= read -r FREELLAPI_URL
+  FREELLAPI_URL="${FREELLAPI_URL:-$DEFAULT_FREELLAPI_URL}"
+  IFS= read -r FREELLAPI_KEY
+fi
+
+# Normalize URL: strip trailing slash, ensure /v1 suffix
+FREELLAPI_URL="${FREELLAPI_URL%/}"
+if [[ "$FREELLAPI_URL" != */v1 ]]; then
+  FREELLAPI_URL="${FREELLAPI_URL}/v1"
+fi
+say "using FreeLLMAPI at $FREELLAPI_URL"
+
+if [ -z "$FREELLAPI_KEY" ]; then
+  die "no FreeLLMAPI key supplied"
+fi
+
+# ---- 1. check FreeLLMAPI is running ----------------------------------------
+say "checking FreeLLMAPI health..."
+HEALTH_URL="${FREELLAPI_URL%/v1}/health"
+if ! curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" --max-time 5 | grep -q 200; then
+  die "FreeLLMAPI not responding on $HEALTH_URL. Check the URL and that it's running."
 fi
 say "FreeLLMAPI is reachable"
 
-# ---- 1. config dir + deploy tracked scripts --------------------------------
+# ---- 2. validate key -------------------------------------------------------
+say "validating key against FreeLLMAPI..."
+CATALOG_RESP=$(curl -s -w "\n%{http_code}" "$FREELLAPI_URL/models" \
+  -H "Authorization: Bearer $FREELLAPI_KEY" --max-time 10)
+HTTP_CODE=$(echo "$CATALOG_RESP" | tail -1)
+if [ "$HTTP_CODE" != "200" ]; then
+  die "FreeLLMAPI catalog fetch failed (HTTP $HTTP_CODE). Check your key."
+fi
+MODEL_COUNT=$(echo "$CATALOG_RESP" | head -1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data', d)))")
+say "catalog OK, $MODEL_COUNT models advertised"
+
+COMP_RESP=$(curl -s -w "\n%{http_code}" "$FREELLAPI_URL/chat/completions" \
+  -H "Authorization: Bearer $FREELLAPI_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' --max-time 15)
+HTTP_CODE=$(echo "$COMP_RESP" | tail -1)
+if [ "$HTTP_CODE" != "200" ]; then
+  die "FreeLLMAPI completion test failed (HTTP $HTTP_CODE). Key may be invalid or no providers configured."
+fi
+say "key validated - FreeLLMAPI auto router works"
+
+# ---- 3. config dir + deploy tracked scripts --------------------------------
 mkdir -p "$CFG"
 chmod 700 "$CFG"
 for f in sync-models.py manage-providers.py start-gateway.sh; do
@@ -46,43 +93,13 @@ for f in sync-models.py manage-providers.py start-gateway.sh; do
   say "deployed $CFG/$f"
 done
 
-# ---- 2. credentials: prompt for FreeLLMAPI key -----------------------------
-if [ ! -f "$CFG/credentials.json" ]; then
-  say "FreeLLMAPI key not found in credentials.json"
-  # Read key hidden from stdin (works both TTY and piped)
-  if [ -t 0 ]; then
-    printf "  Enter your FreeLLMAPI key (input hidden): "
-    IFS= read -rs FREELLAPI_KEY
-    echo
-  else
-    IFS= read -r FREELLAPI_KEY
-  fi
-  if [ -z "$FREELLAPI_KEY" ]; then
-    die "no FreeLLMAPI key supplied"
-  fi
+# Update sync-models.py with the configured FreeLLMAPI URL
+sed -i "s|http://localhost:3002/v1|$FREELLAPI_URL|g" "$REPO/gateway/sync-models.py"
+sed -i "s|http://localhost:3002/v1|$FREELLAPI_URL|g" "$CFG/sync-models.py"
+say "updated sync-models.py with FreeLLMAPI URL"
 
-  say "validating key against FreeLLMAPI..."
-  # Quick validation: catalog + one completion
-  CATALOG_RESP=$(curl -s -w "\n%{http_code}" http://localhost:3002/v1/models \
-    -H "Authorization: Bearer $FREELLAPI_KEY" --max-time 10)
-  HTTP_CODE=$(echo "$CATALOG_RESP" | tail -1)
-  if [ "$HTTP_CODE" != "200" ]; then
-    die "FreeLLMAPI catalog fetch failed (HTTP $HTTP_CODE). Check your key."
-  fi
-  MODEL_COUNT=$(echo "$CATALOG_RESP" | head -1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data', d)))")
-  say "catalog OK, $MODEL_COUNT models advertised"
-
-  # Test completion with 'auto'
-  COMP_RESP=$(curl -s -w "\n%{http_code}" http://localhost:3002/v1/chat/completions \
-    -H "Authorization: Bearer $FREELLAPI_KEY" -H "Content-Type: application/json" \
-    -d '{"model":"auto","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' --max-time 15)
-  HTTP_CODE=$(echo "$COMP_RESP" | tail -1)
-  if [ "$HTTP_CODE" != "200" ]; then
-    die "FreeLLMAPI completion test failed (HTTP $HTTP_CODE). Key may be invalid or no providers configured."
-  fi
-  say "key validated - FreeLLMAPI auto router works"
-
-  cat > "$CFG/credentials.json" <<JSON
+# ---- 4. write credentials.json ---------------------------------------------
+cat > "$CFG/credentials.json" <<JSON
 {
   "master_key": "sk-claude-gateway-local",
   "freellmapi": {
@@ -91,13 +108,10 @@ if [ ! -f "$CFG/credentials.json" ]; then
   }
 }
 JSON
-  chmod 600 "$CFG/credentials.json"
-  say "credentials.json written (mode 600)"
-else
-  say "credentials.json exists, leaving it alone"
-fi
+chmod 600 "$CFG/credentials.json"
+say "credentials.json written (mode 600)"
 
-# ---- 3. systemd unit (rewrite $HOME) ---------------------------------------
+# ---- 5. systemd unit (rewrite $HOME) ---------------------------------------
 mkdir -p "$UNITS"
 for u in "$REPO"/systemd/claude-gateway.service; do
   name="$(basename "$u")"
@@ -105,7 +119,7 @@ for u in "$REPO"/systemd/claude-gateway.service; do
   say "installed $UNITS/$name"
 done
 
-# ---- 4. configure Claude Code settings -------------------------------------
+# ---- 6. configure Claude Code settings -------------------------------------
 say "configuring Claude Code settings..."
 python3 - <<PYEOF
 import json, os, sys
@@ -152,12 +166,12 @@ tmp.replace(settings_path)
 print(f"  updated {settings_path}")
 PYEOF
 
-# ---- 5. enable gateway service ---------------------------------------------
+# ---- 7. enable gateway service ---------------------------------------------
 systemctl --user daemon-reload
 systemctl --user enable --now claude-gateway.service
 say "gateway service enabled and started"
 
-# ---- 6. wait for gateway and verify ----------------------------------------
+# ---- 8. wait for gateway and verify ----------------------------------------
 say "waiting for gateway to be ready..."
 for i in {1..10}; do
   if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/v1/models \

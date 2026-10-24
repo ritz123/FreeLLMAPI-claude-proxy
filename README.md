@@ -10,16 +10,17 @@ cd <your-folder>
 ./install.sh
 ```
 
-**Prerequisites:** FreeLLMAPI running on `localhost:3002`, Python 3, LiteLLM (`pipx install litellm`), systemd user units.
+**Prerequisites:** FreeLLMAPI running (any host/port), Python 3, LiteLLM (`pipx install litellm`), systemd user units.
+
+The installer will prompt for your FreeLLMAPI base URL (default `http://localhost:3002`) and API key.
 
 ## What install.sh does
 
-1. Checks FreeLLMAPI is reachable
-2. Prompts for your FreeLLMAPI key (hidden input)
-3. Validates the key works (catalog + completion test)
-4. Deploys gateway scripts to config directory
-5. Configures `~/.claude/settings.json` automatically
-6. Installs & starts `claude-gateway.service` on port 4000
+1. Prompts for FreeLLMAPI base URL and API key
+2. Validates the key works (catalog + completion test)
+3. Deploys gateway scripts to config directory
+4. Configures `~/.claude/settings.json` automatically
+5. Installs & starts `claude-gateway.service` on port 4000
 
 ## After install
 
