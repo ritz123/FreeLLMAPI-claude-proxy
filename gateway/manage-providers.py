@@ -376,15 +376,25 @@ def cmd_list(args) -> int:
 
 def cmd_add(args) -> int:
     prefix = valid_prefix(args.prefix or input("  prefix (lowercase, e.g. newco): ").strip())
-    base_in = args.base or input(f"  base URL (e.g. https://api.newco.com): ").strip()
+    base_in = args.base or input(f"  base URL (e.g. https://api.newco.com or http://host:11434 for Ollama): ").strip()
     env = valid_env(args.env or input("  env var name (e.g. NEWCO_API_KEY): ").strip())
 
+    # Check if base_in looks like an Ollama instance (any host on port 11434)
+    is_ollama = ":11434" in base_in
     key = args.key
     if not key:
         if sys.stdin.isatty():
-            key = getpass.getpass("  API key (input hidden): ").strip()
+            if is_ollama:
+                print("  Note: For Ollama, you can use any API key (e.g., 'ollama').")
+                key = getpass.getpass("  API key (input hidden, default: ollama): ").strip()
+                if not key:
+                    key = "ollama"
+            else:
+                key = getpass.getpass("  API key (input hidden): ").strip()
         else:
             key = sys.stdin.readline().strip()
+            if not key and is_ollama:
+                key = "ollama"
     if not key:
         die("no API key supplied")
 

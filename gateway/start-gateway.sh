@@ -47,4 +47,6 @@ export NVIDIA_API_KEY="$(readkey nvidia)"
 
 
 
+export FREELLMAPI_API_KEY="$(readkey freellmapi)"
+
 exec ~/.local/bin/litellm --config /home/biplab/.config/claude-gateway/litellm_config.yaml --host 127.0.0.1 --port 4000

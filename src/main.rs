@@ -136,6 +136,7 @@ struct Provider {
 const PROVIDERS: &[Provider] = &[
     Provider { prefix: "above", base: "https://api.above.dev/v1", env: "ABOVE_API_KEY" },
     Provider { prefix: "nvidia", base: "https://integrate.api.nvidia.com/v1", env: "NVIDIA_API_KEY" },
+    Provider { prefix: "freellmapi", base: "http://localhost:3002/v1", env: "FREELLMAPI_API_KEY" },
 ];
 
 /// Quality ranking for the auto-fallback chain: best coding/general first.

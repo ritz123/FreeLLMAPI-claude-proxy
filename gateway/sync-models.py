@@ -96,6 +96,7 @@ SKIP_RE = re.compile(
 PROVIDERS = [
     ("above", "https://api.above.dev/v1", "ABOVE_API_KEY"),
     ("nvidia", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+    ("freellmapi", "http://localhost:3002/v1", "FREELLMAPI_API_KEY"),
 ]
 
 # Quality ranking for the auto-fallback chain: best coding/general model first.
